@@ -13,12 +13,12 @@
 <body>
 <canvas id="canvas" width="700" height="700"></canvas>
 <div class="controls">
-  <button onclick="moveCamera(-0.3, 0)">⬅️ Left</button>
-  <button onclick="moveCamera(0.3, 0)">➡️ Right</button>
-  <button onclick="moveCamera(0, 0.3)">⬆️ Up</button>
-  <button onclick="moveCamera(0, -0.3)">⬇️ Down</button>
-  <button onclick="zoomCamera(-0.3)">➕ Closer</button>
-  <button onclick="zoomCamera(0.3)">➖ Farther</button>
+  <button onclick="moveCamera(-0.3, 0)">Left</button>
+  <button onclick="moveCamera(0.3, 0)">Right</button>
+  <button onclick="moveCamera(0, 0.3)">Up</button>
+  <button onclick="moveCamera(0, -0.3)">Down</button>
+  <button onclick="zoomCamera(-0.3)">Closer</button>
+  <button onclick="zoomCamera(0.3)">Farther</button>
 </div>
 <script>
 const W = 700, H = 700;
@@ -26,6 +26,31 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const img = ctx.createImageData(W, H);
 const zbuffer = new Float32Array(W * H);
+
+// ---------- Texture: a checkerboard drawn by code ----------
+const TEX_SIZE = 512;
+const texCanvas = document.createElement('canvas');
+texCanvas.width = TEX_SIZE;
+texCanvas.height = TEX_SIZE;
+const tctx = texCanvas.getContext('2d');
+const SQUARE = TEX_SIZE / 16; // 16 x 16 squares
+for (let sy = 0; sy < 16; sy++) {
+  for (let sx = 0; sx < 16; sx++) {
+    tctx.fillStyle = (sx + sy) % 2 === 0 ? '#e8a33d' : '#fff3d6';
+    tctx.fillRect(sx * SQUARE, sy * SQUARE, SQUARE, SQUARE);
+  }
+}
+const texData = tctx.getImageData(0, 0, TEX_SIZE, TEX_SIZE).data;
+
+// Get the texture color for coordinates u, v (both between 0 and 1)
+function sampleTexture(u, v) {
+  let tx = Math.floor(u * TEX_SIZE);
+  let ty = Math.floor((1 - v) * TEX_SIZE); // flip v: in OBJ files v goes up
+  tx = Math.max(0, Math.min(TEX_SIZE - 1, tx));
+  ty = Math.max(0, Math.min(TEX_SIZE - 1, ty));
+  const i = (ty * TEX_SIZE + tx) * 4;
+  return [texData[i], texData[i + 1], texData[i + 2]];
+}
 
 // ---------- Math helpers ----------
 function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
@@ -101,28 +126,24 @@ function zoomCamera(dz) {
 }
 
 // ---------- Phong lighting ----------
-// Light direction: pointing from the face towards the light (up-right-front)
 const lightDir = normalize([0.5, 0.6, 1]);
-const ambient = 0.1;        // minimum light everywhere
-const diffuseK = 0.8;       // main light strength
-const specularK = 0.5;      // shininess strength
-const shininess = 30;       // bigger = smaller, sharper highlight
+const ambient = 0.15;
+const diffuseK = 0.85;
+const specularK = 0.4;
+const shininess = 30;
 
-// Compute the color of one pixel from its normal and view direction
+// Returns [diffuse part (0..1), specular part (0..1)]
 function phong(normal, viewDir) {
   const n = normalize(normal);
-  const diff = Math.max(0, dot(n, lightDir));
-  // Reflection of the light around the normal: R = 2(N.L)N - L
   const nl = dot(n, lightDir);
+  const diff = Math.max(0, nl);
   const refl = [2 * nl * n[0] - lightDir[0], 2 * nl * n[1] - lightDir[1], 2 * nl * n[2] - lightDir[2]];
   const spec = diff > 0 ? Math.pow(Math.max(0, dot(normalize(refl), viewDir)), shininess) : 0;
-  const v = ambient + diffuseK * diff + specularK * spec;
-  const c = Math.min(255, Math.round(255 * v));
-  return c;
+  return [ambient + diffuseK * diff, specularK * spec];
 }
 
 // ---------- Rasterizer ----------
-// Each vertex: x, y, z (screen) + nx, ny, nz (normal)
+// Each corner has: x, y, z (screen), n (normal), uv (texture coordinates)
 function drawTriangle(a, b, c) {
   const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
   const maxX = Math.min(W - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
@@ -144,40 +165,59 @@ function drawTriangle(a, b, c) {
       if (z >= zbuffer[idx]) continue;
       zbuffer[idx] = z;
 
-      // Mix the 3 corner normals (this makes the shading smooth)
+      // Mix the 3 corner normals
       const normal = [
         u * a.n[0] + v * b.n[0] + w * c.n[0],
         u * a.n[1] + v * b.n[1] + w * c.n[1],
         u * a.n[2] + v * b.n[2] + w * c.n[2]
       ];
-      const col = phong(normal, viewDirGlobal);
+
+      // Mix the 3 corner texture coordinates (same trick, same u, v, w)
+      const tu = u * a.uv[0] + v * b.uv[0] + w * c.uv[0];
+      const tv = u * a.uv[1] + v * b.uv[1] + w * c.uv[1];
+      const texColor = sampleTexture(tu, tv);
+
+      const [lightAmount, specAmount] = phong(normal, viewDirGlobal);
       const i = idx * 4;
-      img.data[i] = col; img.data[i + 1] = col; img.data[i + 2] = col; img.data[i + 3] = 255;
+      img.data[i]     = Math.min(255, texColor[0] * lightAmount + 255 * specAmount);
+      img.data[i + 1] = Math.min(255, texColor[1] * lightAmount + 255 * specAmount);
+      img.data[i + 2] = Math.min(255, texColor[2] * lightAmount + 255 * specAmount);
+      img.data[i + 3] = 255;
     }
   }
 }
 
-// ---------- OBJ parser ----------
+// ---------- OBJ parser (now also reads "vt" lines) ----------
 function parseOBJ(text) {
-  const vertices = [], faces = [];
+  const vertices = [], texcoords = [], faces = [];
   for (const line of text.split('\n')) {
     const p = line.trim().split(/\s+/);
     if (p[0] === 'v') vertices.push([parseFloat(p[1]), parseFloat(p[2]), parseFloat(p[3])]);
+    if (p[0] === 'vt') texcoords.push([parseFloat(p[1]), parseFloat(p[2])]);
     if (p[0] === 'f') {
-      const idx = p.slice(1).map(s => parseInt(s.split('/')[0]) - 1);
-      for (let i = 1; i < idx.length - 1; i++) faces.push([idx[0], idx[i], idx[i + 1]]);
+      // each corner looks like "v/vt/vn"
+      const corners = p.slice(1).map(s => {
+        const parts = s.split('/');
+        return {
+          v: parseInt(parts[0]) - 1,
+          vt: parts[1] ? parseInt(parts[1]) - 1 : -1
+        };
+      });
+      for (let i = 1; i < corners.length - 1; i++) {
+        faces.push([corners[0], corners[i], corners[i + 1]]);
+      }
     }
   }
-  return { vertices, faces };
+  return { vertices, texcoords, faces };
 }
 
-// For every vertex, average the normals of all triangles that touch it
 function computeVertexNormals(model) {
   const normals = model.vertices.map(() => [0, 0, 0]);
   for (const f of model.faces) {
-    const v0 = model.vertices[f[0]], v1 = model.vertices[f[1]], v2 = model.vertices[f[2]];
-    const n = cross(sub(v2, v0), sub(v1, v0)); // not normalized: bigger triangles count more
-    for (const i of f) {
+    const v0 = model.vertices[f[0].v], v1 = model.vertices[f[1].v], v2 = model.vertices[f[2].v];
+    const n = cross(sub(v2, v0), sub(v1, v0));
+    for (const corner of f) {
+      const i = corner.v;
       normals[i][0] += n[0]; normals[i][1] += n[1]; normals[i][2] += n[2];
     }
   }
@@ -192,35 +232,39 @@ let viewDirGlobal = [0, 0, 1];
 function render() {
   if (!model) return;
 
-  // Clear the picture and the Z-buffer
   for (let i = 0; i < img.data.length; i += 4) {
     img.data[i] = 0; img.data[i + 1] = 0; img.data[i + 2] = 0; img.data[i + 3] = 255;
   }
   zbuffer.fill(Infinity);
 
-  // Direction from the face towards the camera
   viewDirGlobal = normalize(sub(camera.position, camera.target));
-
   const pv = mulMat(camera.getProjectionMatrix(), camera.getViewMatrix());
 
-  const verts = model.vertices.map((v, i) => {
+  // Project every vertex to the screen once
+  const projected = model.vertices.map(v => {
     const c = mulVec(pv, [v[0], v[1], v[2], 1]);
     return {
       x: (c[0] / c[3] + 1) * W / 2,
       y: (1 - c[1] / c[3]) * H / 2,
-      z: c[2] / c[3],
-      n: vertexNormals[i]
+      z: c[2] / c[3]
     };
   });
 
   for (const f of model.faces) {
-    const v0 = model.vertices[f[0]], v1 = model.vertices[f[1]], v2 = model.vertices[f[2]];
-    // Skip triangles that face away from the camera
+    const v0 = model.vertices[f[0].v], v1 = model.vertices[f[1].v], v2 = model.vertices[f[2].v];
     const fn = normalize(cross(sub(v2, v0), sub(v1, v0)));
     const toCam = normalize(sub(camera.position, v0));
-    if (dot(fn, toCam) <= 0) continue;
+    if (dot(fn, toCam) <= 0) continue; // faces away from the camera
 
-    drawTriangle(verts[f[0]], verts[f[1]], verts[f[2]]);
+    // Build the 3 corners of this triangle
+    const corners = f.map(c => ({
+      x: projected[c.v].x,
+      y: projected[c.v].y,
+      z: projected[c.v].z,
+      n: vertexNormals[c.v],
+      uv: c.vt >= 0 ? model.texcoords[c.vt] : [0, 0]
+    }));
+    drawTriangle(corners[0], corners[1], corners[2]);
   }
   ctx.putImageData(img, 0, 0);
 }

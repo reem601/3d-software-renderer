@@ -1,10 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>3D Software Renderer</title>
+<style>
+  body { background: #444; margin: 20px; }
+  canvas { background: #000; display: block; }
+</style>
+</head>
+<body>
 <canvas id="canvas" width="400" height="400"></canvas>
 <script>
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const img = ctx.createImageData(400, 400);
 
-// NEW: paint the whole image black (alpha 255 = fully visible)
+// Make every pixel opaque (black by default)
 for (let i = 3; i < img.data.length; i += 4) img.data[i] = 255;
 
 function setPixel(x, y, r, g, b) {
@@ -96,3 +107,5 @@ for (const face of model.faces) {
 
 ctx.putImageData(img, 0, 0);
 </script>
+</body>
+</html>

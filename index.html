@@ -3,23 +3,23 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
-// صورة فاضية بحجم الكانفس، هي اللي رح نرسم عليها
+// Create an empty image the same size as the canvas. We will draw on it.
 const img = ctx.createImageData(400, 400);
 
-// دالة بتلوّن بكسل واحد بمكان (x, y)
+// Color a single pixel at position (x, y)
 function setPixel(x, y, r, g, b) {
   const i = (y * 400 + x) * 4;
-  img.data[i]     = r;
-  img.data[i + 1] = g;
-  img.data[i + 2] = b;
-  img.data[i + 3] = 255;
+  img.data[i]     = r;   // red
+  img.data[i + 1] = g;   // green
+  img.data[i + 2] = b;   // blue
+  img.data[i + 3] = 255; // alpha (255 = fully visible)
 }
 
-// نلوّن 100 بكسل بخط أحمر أفقي
+// Draw a red horizontal line of 100 pixels
 for (let x = 100; x < 200; x++) {
   setPixel(x, 200, 255, 0, 0);
 }
 
-// نعرض الصورة على الكانفس
+// Show the image on the canvas
 ctx.putImageData(img, 0, 0);
 </script>

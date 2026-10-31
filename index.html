@@ -2,24 +2,48 @@
 <script>
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
-
-// Create an empty image the same size as the canvas. We will draw on it.
 const img = ctx.createImageData(400, 400);
 
-// Color a single pixel at position (x, y)
 function setPixel(x, y, r, g, b) {
   const i = (y * 400 + x) * 4;
-  img.data[i]     = r;   // red
-  img.data[i + 1] = g;   // green
-  img.data[i + 2] = b;   // blue
-  img.data[i + 3] = 255; // alpha (255 = fully visible)
+  img.data[i]     = r;
+  img.data[i + 1] = g;
+  img.data[i + 2] = b;
+  img.data[i + 3] = 255;
 }
 
-// Draw a red horizontal line of 100 pixels
-for (let x = 100; x < 200; x++) {
-  setPixel(x, 200, 255, 0, 0);
+// Returns 3 numbers. If all 3 are >= 0, the point (px, py) is inside the triangle.
+function barycentric(a, b, c, px, py) {
+  const d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+  const u = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / d;
+  const v = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / d;
+  return [u, v, 1 - u - v];
 }
 
-// Show the image on the canvas
+function drawTriangle(a, b, c, r, g, bl) {
+  // Bounding box around the triangle
+  const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+  const maxX = Math.min(399, Math.ceil(Math.max(a.x, b.x, c.x)));
+  const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+  const maxY = Math.min(399, Math.ceil(Math.max(a.y, b.y, c.y)));
+
+  // Check every pixel inside the box
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const [u, v, w] = barycentric(a, b, c, x, y);
+      if (u >= 0 && v >= 0 && w >= 0) {
+        setPixel(x, y, r, g, bl);
+      }
+    }
+  }
+}
+
+// Three corners of the triangle
+const p1 = { x: 50,  y: 350 };
+const p2 = { x: 350, y: 300 };
+const p3 = { x: 200, y: 50  };
+
+drawTriangle(p1, p2, p3, 255, 0, 0);
+
 ctx.putImageData(img, 0, 0);
 </script>

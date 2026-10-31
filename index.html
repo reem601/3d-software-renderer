@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>3D Software Renderer</title>
+<style>
+body {
+    margin: 0;
+    background: #171717;
+    color: white;
+    font-family: Arial;
+    text-align: center;
+}
+h1 { margin: 20px; }
+canvas {
+    background: black;
+    border: 1px solid #555;
+    width: 800px;
+    max-width: 95%;
+}
+</style>
+</head>
+<body>
+<h1>3D Software Renderer</h1>
+<canvas id="screen" width="800" height="600"></canvas>
+
+<script>
+const canvas = document.getElementById("screen");
+const ctx = canvas.getContext("2d");
+
+function triangle(a,b,c,color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(a[0],a[1]);
+    ctx.lineTo(b[0],b[1]);
+    ctx.lineTo(c[0],c[1]);
+    ctx.closePath();
+    ctx.fill();
+}
+
+triangle([400,100],[150,450],[650,450],"#777");
+triangle([400,100],[400,450],[650,450],"#aaa");
+triangle([400,100],[150,450],[400,450],"#555");
+</script>
+</body>
+</html>

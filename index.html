@@ -2,45 +2,275 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>3D Software Renderer</title>
 <style>
 body {
-    margin: 0;
-    background: #171717;
-    color: white;
-    font-family: Arial;
-    text-align: center;
+  margin: 0;
+  background: #171923;
+  color: white;
+  font-family: Arial;
+  text-align: center;
 }
 h1 { margin: 20px; }
 canvas {
-    background: black;
-    border: 1px solid #555;
-    width: 800px;
-    max-width: 95%;
+  width: 90%;
+  max-width: 850px;
+  background: #080a12;
+  border: 1px solid #555;
+}
+.controls { margin: 15px; }
+button, input {
+  padding: 10px;
+  margin: 5px;
 }
 </style>
 </head>
 <body>
+
 <h1>3D Software Renderer</h1>
+<p>Barycentric Rasterizer | Camera | Phong Lighting</p>
+
 <canvas id="screen" width="800" height="600"></canvas>
+
+<div class="controls">
+  <button onclick="rotation += 0.15">Rotate</button>
+  <button onclick="rotation = 0">Reset</button>
+  <label>Load OBJ: <input type="file" id="objFile" accept=".obj"></label>
+</div>
 
 <script>
 const canvas = document.getElementById("screen");
 const ctx = canvas.getContext("2d");
 
-function triangle(a,b,c,color) {
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(a[0],a[1]);
-    ctx.lineTo(b[0],b[1]);
-    ctx.lineTo(c[0],c[1]);
-    ctx.closePath();
-    ctx.fill();
+const W = canvas.width;
+const H = canvas.height;
+
+let rotation = 0;
+let vertices = [];
+let faces = [];
+
+// Cube geometry
+const cubeVertices = [
+ [-1,-1,-1], [1,-1,-1],
+ [1,1,-1], [-1,1,-1],
+ [-1,-1,1], [1,-1,1],
+ [1,1,1], [-1,1,1]
+];
+
+const cubeFaces = [
+ [0,1,2],[0,2,3],
+ [4,6,5],[4,7,6],
+ [0,4,5],[0,5,1],
+ [3,2,6],[3,6,7],
+ [0,3,7],[0,7,4],
+ [1,5,6],[1,6,2]
+];
+
+vertices = cubeVertices;
+faces = cubeFaces;
+
+// Vector operations
+function sub(a,b) {
+ return a.map((v,i)=>v-b[i]);
 }
 
-triangle([400,100],[150,450],[650,450],"#777");
-triangle([400,100],[400,450],[650,450],"#aaa");
-triangle([400,100],[150,450],[400,450],"#555");
+function dot(a,b) {
+ return a.reduce((s,v,i)=>s+v*b[i],0);
+}
+
+function cross(a,b) {
+ return [
+  a[1]*b[2]-a[2]*b[1],
+  a[2]*b[0]-a[0]*b[2],
+  a[0]*b[1]-a[1]*b[0]
+ ];
+}
+
+function normalize(v) {
+ const l=Math.hypot(...v)||1;
+ return v.map(x=>x/l);
+}
+
+// Camera and projection
+function transform(v) {
+ const c=Math.cos(rotation);
+ const s=Math.sin(rotation);
+
+ const x=v[0]*c-v[2]*s;
+ const z=v[0]*s+v[2]*c;
+ const y=v[1];
+
+ // Camera at (0,0,4)
+ const depth=z+4;
+
+ return {x,y,z:depth};
+}
+
+function project(v) {
+ const focal=500;
+ return {
+  x:W/2+v.x*focal/v.z,
+  y:H/2-v.y*focal/v.z,
+  z:v.z
+ };
+}
+
+// Barycentric coordinates
+function barycentric(p,a,b,c) {
+ const v0=sub([b.x,b.y],[a.x,a.y]);
+ const v1=sub([c.x,c.y],[a.x,a.y]);
+ const v2=sub([p.x,p.y],[a.x,a.y]);
+
+ const d00=dot(v0,v0);
+ const d01=dot(v0,v1);
+ const d11=dot(v1,v1);
+ const d20=dot(v2,v0);
+ const d21=dot(v2,v1);
+
+ const den=d00*d11-d01*d01;
+ if(Math.abs(den)<0.000001) return null;
+
+ const v=(d11*d20-d01*d21)/den;
+ const w=(d00*d21-d01*d20)/den;
+ const u=1-v-w;
+
+ return [u,v,w];
+}
+
+let image;
+let zbuffer;
+
+function renderTriangle(a,b,c,normal) {
+ const minX=Math.max(0,Math.floor(Math.min(a.x,b.x,c.x)));
+ const maxX=Math.min(W-1,Math.ceil(Math.max(a.x,b.x,c.x)));
+ const minY=Math.max(0,Math.floor(Math.min(a.y,b.y,c.y)));
+ const maxY=Math.min(H-1,Math.ceil(Math.max(a.y,b.y,c.y)));
+
+ const light=normalize([-0.5,0.8,1]);
+ const view=[0,0,1];
+
+ const diffuse=Math.max(0,dot(normal,light));
+ const reflected=normalize(normal.map((v,i)=>
+  2*diffuse*v-light[i]
+ ));
+ const specular=Math.pow(
+  Math.max(0,dot(reflected,view)),24
+ );
+
+ const intensity=0.18+0.7*diffuse+0.35*specular;
+
+ for(let y=minY;y<=maxY;y++) {
+  for(let x=minX;x<=maxX;x++) {
+   const bc=barycentric({x:x+0.5,y:y+0.5},a,b,c);
+   if(!bc) continue;
+
+   const [u,v,w]=bc;
+   if(u<0v<0w<0) continue;
+
+   // Perspective-correct depth
+   const depth=1/(u/a.z+v/b.z+w/c.z);
+   const index=y*W+x;
+
+   if(depth>=zbuffer[index]) continue;
+   zbuffer[index]=depth;
+
+   const base=135;
+   const color=Math.min(255,base*intensity);
+
+   const i=index*4;
+   image.data[i]=color;
+   image.data[i+1]=color*0.85;
+   image.data[i+2]=color*0.75;
+   image.data[i+3]=255;
+  }
+ }
+}
+
+function render() {
+ rotation+=0.006;
+
+ image=ctx.createImageData(W,H);
+ zbuffer=new Float32Array(W*H);
+ zbuffer.fill(Infinity);
+
+ for(let i=3;i<image.data.length;i+=4)
+  image.data[i]=255;
+
+ for(const face of faces) {
+  const p=face.map(i=>transform(vertices[i]));
+
+  // Near-plane clipping
+  if(p.some(v=>v.z<=0.2)) continue;
+
+  const a=project(p[0]);
+  const b=project(p[1]);
+  const c=project(p[2]);
+
+  const normal=normalize(cross(
+   sub(p[1],p[0]),
+   sub(p[2],p[0])
+  ));
+
+  const center=[
+   (p[0].x+p[1].x+p[2].x)/3,
+   (p[0].y+p[1].y+p[2].y)/3,
+   (p[0].z+p[1].z+p[2].z)/3
+  ];
+
+  const direction=normalize(center.map(v=>-v));
+  if(dot(normal,direction)<=0) continue;
+
+  renderTriangle(a,b,c,normal);
+ }
+
+ ctx.putImageData(image,0,0);
+ requestAnimationFrame(render);
+}
+
+// OBJ file parser
+document.getElementById("objFile").addEventListener("change",e=>{
+ const file=e.target.files[0];
+ if(!file) return;
+
+ const reader=new FileReader();
+
+ reader.onload=()=>{
+  const lines=reader.result.split(/\r?\n/);
+  const newVertices=[];
+  const newFaces=[];
+
+  for(const line of lines) {
+   const parts=line.trim().split(/\s+/);
+
+   if(parts[0]==="v") {
+    newVertices.push(parts.slice(1,4).map(Number));
+   }
+
+   if(parts[0]==="f") {
+    const ids=parts.slice(1).map(v=>
+     parseInt(v.split("/")[0],10)-1
+    );
+
+    for(let i=1;i<ids.length-1;i++) {
+     newFaces.push([ids[0],ids[i],ids[i+1]]);
+    }
+   }
+  }
+
+  if(newVertices.length && newFaces.length) {
+   vertices=newVertices;
+   faces=newFaces;
+   rotation=0;
+  } else {
+   alert("Invalid OBJ file");
+  }
+ };
+
+ reader.readAsText(file);
+});
+
+render();
 </script>
 </body>
 </html>

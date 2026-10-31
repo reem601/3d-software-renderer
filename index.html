@@ -1,6 +1,30 @@
-<pre id="out"></pre>
+<canvas id="canvas" width="400" height="400"></canvas>
 <script>
-// A cube written as OBJ text. Later we will load a real file instead.
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const img = ctx.createImageData(400, 400);
+
+function setPixel(x, y, r, g, b) {
+  if (x < 0 || x >= 400 || y < 0 || y >= 400) return;
+  const i = (y * 400 + x) * 4;
+  img.data[i]     = r;
+  img.data[i + 1] = g;
+  img.data[i + 2] = b;
+  img.data[i + 3] = 255;
+}
+
+// Draw a line between two points, pixel by pixel
+function drawLine(x0, y0, x1, y1, r, g, b) {
+  const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
+  for (let i = 0; i <= steps; i++) {
+    const t = steps === 0 ? 0 : i / steps;
+    const x = Math.round(x0 + (x1 - x0) * t);
+    const y = Math.round(y0 + (y1 - y0) * t);
+    setPixel(x, y, r, g, b);
+  }
+}
+
+// A cube written as OBJ text
 const objText = `
 v -1 -1 -1
 v  1 -1 -1
@@ -24,26 +48,19 @@ f 4 8 5
 f 4 5 1
 `;
 
-// Read the text and collect vertices and faces
 function parseOBJ(text) {
   const vertices = [];
   const faces = [];
-  const lines = text.split('\n');
-
-  for (const line of lines) {
+  for (const line of text.split('\n')) {
     const parts = line.trim().split(/\s+/);
-
     if (parts[0] === 'v') {
-      // v x y z -> a point
       vertices.push({
         x: parseFloat(parts[1]),
         y: parseFloat(parts[2]),
         z: parseFloat(parts[3])
       });
     }
-
     if (parts[0] === 'f') {
-      // f a b c -> a triangle (subtract 1 because JS starts counting from 0)
       faces.push([
         parseInt(parts[1]) - 1,
         parseInt(parts[2]) - 1,
@@ -51,15 +68,28 @@ function parseOBJ(text) {
       ]);
     }
   }
-
   return { vertices, faces };
+}
+
+// Convert a model point (-1..1) to a screen pixel (0..400)
+function toScreen(v) {
+  return {
+    x: Math.round((v.x * 0.7 + 1) * 200), // 0.7 makes the cube a bit smaller
+    y: Math.round((1 - v.y * 0.7) * 200)  // flip y: screen y goes down
+  };
 }
 
 const model = parseOBJ(objText);
 
-document.getElementById('out').textContent =
-  'Vertices: ' + model.vertices.length + '\n' +
-  'Triangles: ' + model.faces.length + '\n\n' +
-  'First vertex: ' + JSON.stringify(model.vertices[0]) + '\n' +
-  'First triangle: ' + JSON.stringify(model.faces[0]);
+// Draw the 3 edges of every triangle
+for (const face of model.faces) {
+  const a = toScreen(model.vertices[face[0]]);
+  const b = toScreen(model.vertices[face[1]]);
+  const c = toScreen(model.vertices[face[2]]);
+  drawLine(a.x, a.y, b.x, b.y, 255, 255, 255);
+  drawLine(b.x, b.y, c.x, c.y, 255, 255, 255);
+  drawLine(c.x, c.y, a.x, a.y, 255, 255, 255);
+}
+
+ctx.putImageData(img, 0, 0);
 </script>

@@ -15,47 +15,118 @@ const W = 700, H = 700;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const img = ctx.createImageData(W, H);
-
-// Make every pixel opaque (black by default)
 for (let i = 3; i < img.data.length; i += 4) img.data[i] = 255;
 
-// Z-buffer: for every pixel, remember how close the nearest point is.
-// Starts at -Infinity (nothing drawn yet). Bigger z = closer to us.
-const zbuffer = new Float32Array(W * H).fill(-Infinity);
+// Z-buffer: smaller z = closer to the camera
+const zbuffer = new Float32Array(W * H).fill(Infinity);
 
 function setPixel(x, y, r, g, b) {
   const i = (y * W + x) * 4;
-  img.data[i]     = r;
-  img.data[i + 1] = g;
-  img.data[i + 2] = b;
-  img.data[i + 3] = 255;
+  img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
 }
 
-// Returns u, v, w. If all are >= 0, the point is inside the triangle.
+// ---------- Small math helpers ----------
+function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function cross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function normalize(a) {
+  const l = Math.sqrt(dot(a, a));
+  return l === 0 ? [0, 0, 0] : [a[0] / l, a[1] / l, a[2] / l];
+}
+
+// 4x4 matrices are stored as 16 numbers, row by row
+function mulMat(a, b) {
+  const out = new Array(16).fill(0);
+  for (let r = 0; r < 4; r++)
+    for (let c = 0; c < 4; c++)
+      for (let k = 0; k < 4; k++)
+        out[r * 4 + c] += a[r * 4 + k] * b[k * 4 + c];
+  return out;
+}
+function mulVec(m, v) { // v = [x, y, z, w]
+  const out = [0, 0, 0, 0];
+  for (let r = 0; r < 4; r++)
+    for (let c = 0; c < 4; c++)
+      out[r] += m[r * 4 + c] * v[c];
+  return out;
+}
+
+// ---------- Camera ----------
+class Camera {
+  constructor(position, target, up, fovDegrees, aspect, near, far) {
+    this.position = position;
+    this.target = target;
+    this.up = up;
+    this.fov = fovDegrees * Math.PI / 180;
+    this.aspect = aspect;
+    this.near = near;
+    this.far = far;
+  }
+
+  // View matrix: moves the world so that the camera is at the origin looking down -z
+  getViewMatrix() {
+    const f = normalize(sub(this.target, this.position)); // forward
+    const s = normalize(cross(f, this.up));               // right
+    const u = cross(s, f);                                // true up
+    const e = this.position;
+    return [
+       s[0],  s[1],  s[2], -dot(s, e),
+       u[0],  u[1],  u[2], -dot(u, e),
+      -f[0], -f[1], -f[2],  dot(f, e),
+       0,     0,     0,     1
+    ];
+  }
+
+  // Projection matrix: perspective (far things look smaller)
+  getProjectionMatrix() {
+    const t = 1 / Math.tan(this.fov / 2);
+    const n = this.near, f = this.far;
+    return [
+      t / this.aspect, 0, 0, 0,
+      0, t, 0, 0,
+      0, 0, (f + n) / (n - f), 2 * f * n / (n - f),
+      0, 0, -1, 0
+    ];
+  }
+
+  // Direction the camera looks (used for the light)
+  getForward() { return normalize(sub(this.target, this.position)); }
+}
+
+// Change these numbers to move the camera!
+const camera = new Camera(
+  [0, 0, 3],   // position: 3 units in front of the face
+  [0, 0, 0],   // target: looking at the center
+  [0, 1, 0],   // up direction
+  45,          // field of view in degrees
+  W / H,       // aspect ratio
+  0.1,         // near
+  100          // far
+);
+
+// ---------- Rasterizer ----------
 function barycentric(a, b, c, px, py) {
   const d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
-  if (d === 0) return [-1, -1, -1]; // flat triangle, skip it
+  if (d === 0) return [-1, -1, -1];
   const u = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / d;
   const v = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / d;
   return [u, v, 1 - u - v];
 }
 
-// Fill a triangle. Each point has x, y (screen) and z (depth).
 function drawTriangle(a, b, c, r, g, bl) {
   const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
   const maxX = Math.min(W - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
   const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
   const maxY = Math.min(H - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
-
   for (let y = minY; y <= maxY; y++) {
     for (let x = minX; x <= maxX; x++) {
       const [u, v, w] = barycentric(a, b, c, x, y);
-      if (u < 0 || v < 0 || w < 0) continue; // outside the triangle
-
-      // Depth of this pixel = mix of the 3 corner depths
+      if (u < 0 || v < 0 || w < 0) continue;
       const z = u * a.z + v * b.z + w * c.z;
       const idx = y * W + x;
-      if (z > zbuffer[idx]) {          // closer than what is already there?
+      if (z < zbuffer[idx]) {
         zbuffer[idx] = z;
         setPixel(x, y, r, g, bl);
       }
@@ -63,41 +134,23 @@ function drawTriangle(a, b, c, r, g, bl) {
   }
 }
 
-// Read an OBJ file (only "v" and "f" lines)
+// ---------- OBJ parser ----------
 function parseOBJ(text) {
-  const vertices = [];
-  const faces = [];
+  const vertices = [], faces = [];
   for (const line of text.split('\n')) {
-    const parts = line.trim().split(/\s+/);
-    if (parts[0] === 'v') {
-      vertices.push({
-        x: parseFloat(parts[1]),
-        y: parseFloat(parts[2]),
-        z: parseFloat(parts[3])
-      });
+    const p = line.trim().split(/\s+/);
+    if (p[0] === 'v') {
+      vertices.push([parseFloat(p[1]), parseFloat(p[2]), parseFloat(p[3])]);
     }
-    if (parts[0] === 'f') {
-      const idx = parts.slice(1).map(p => parseInt(p.split('/')[0]) - 1);
-      for (let i = 1; i < idx.length - 1; i++) {
-        faces.push([idx[0], idx[i], idx[i + 1]]);
-      }
+    if (p[0] === 'f') {
+      const idx = p.slice(1).map(s => parseInt(s.split('/')[0]) - 1);
+      for (let i = 1; i < idx.length - 1; i++) faces.push([idx[0], idx[i], idx[i + 1]]);
     }
   }
   return { vertices, faces };
 }
 
-// Model point (about -1..1) -> screen point. Keep z for the Z-buffer.
-function toScreen(v) {
-  return {
-    x: (v.x * 0.9 + 1) * W / 2,
-    y: (1 - v.y * 0.9) * H / 2,
-    z: v.z
-  };
-}
-
-// Light shines from the camera towards the face
-const light = { x: 0, y: 0, z: -1 };
-
+// ---------- Render ----------
 fetch('african_head.obj')
   .then(res => {
     if (!res.ok) throw new Error('african_head.obj not found');
@@ -106,27 +159,30 @@ fetch('african_head.obj')
   .then(text => {
     const model = parseOBJ(text);
 
+    // Step 1: clip = Projection * View * vertex
+    const pv = mulMat(camera.getProjectionMatrix(), camera.getViewMatrix());
+
+    // Step 2: divide by w, then convert to screen pixels
+    const screen = model.vertices.map(v => {
+      const c = mulVec(pv, [v[0], v[1], v[2], 1]);
+      const ndcX = c[0] / c[3], ndcY = c[1] / c[3], ndcZ = c[2] / c[3];
+      return { x: (ndcX + 1) * W / 2, y: (1 - ndcY) * H / 2, z: ndcZ };
+    });
+
+    // Light comes from the camera towards the face
+    const light = camera.getForward();
+
     for (const face of model.faces) {
       const v0 = model.vertices[face[0]];
       const v1 = model.vertices[face[1]];
       const v2 = model.vertices[face[2]];
 
-      // Normal of the triangle = cross product of two of its edges
-      const ax = v2.x - v0.x, ay = v2.y - v0.y, az = v2.z - v0.z;
-      const bx = v1.x - v0.x, by = v1.y - v0.y, bz = v1.z - v0.z;
-      let nx = ay * bz - az * by;
-      let ny = az * bx - ax * bz;
-      let nz = ax * by - ay * bx;
-      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
-      if (len === 0) continue;
-      nx /= len; ny /= len; nz /= len;
-
-      // Brightness = how much the triangle faces the light (0..1)
-      const intensity = nx * light.x + ny * light.y + nz * light.z;
-      if (intensity <= 0) continue; // triangle faces away, skip it
+      const n = normalize(cross(sub(v2, v0), sub(v1, v0)));
+      const intensity = dot(n, light);
+      if (intensity <= 0) continue;
 
       const c = Math.round(255 * intensity);
-      drawTriangle(toScreen(v0), toScreen(v1), toScreen(v2), c, c, c);
+      drawTriangle(screen[face[0]], screen[face[1]], screen[face[2]], c, c, c);
     }
 
     ctx.putImageData(img, 0, 0);

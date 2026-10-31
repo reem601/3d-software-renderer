@@ -1,53 +1,65 @@
-<canvas id="canvas" width="400" height="400"></canvas>
+<pre id="out"></pre>
 <script>
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const img = ctx.createImageData(400, 400);
+// A cube written as OBJ text. Later we will load a real file instead.
+const objText = `
+v -1 -1 -1
+v  1 -1 -1
+v  1  1 -1
+v -1  1 -1
+v -1 -1  1
+v  1 -1  1
+v  1  1  1
+v -1  1  1
+f 1 2 3
+f 1 3 4
+f 5 7 6
+f 5 8 7
+f 1 5 6
+f 1 6 2
+f 2 6 7
+f 2 7 3
+f 3 7 8
+f 3 8 4
+f 4 8 5
+f 4 5 1
+`;
 
-function setPixel(x, y, r, g, b) {
-  const i = (y * 400 + x) * 4;
-  img.data[i]     = r;
-  img.data[i + 1] = g;
-  img.data[i + 2] = b;
-  img.data[i + 3] = 255;
-}
+// Read the text and collect vertices and faces
+function parseOBJ(text) {
+  const vertices = [];
+  const faces = [];
+  const lines = text.split('\n');
 
-// Returns 3 numbers. If all 3 are >= 0, the point (px, py) is inside the triangle.
-function barycentric(a, b, c, px, py) {
-  const d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
-  const u = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / d;
-  const v = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / d;
-  return [u, v, 1 - u - v];
-}
+  for (const line of lines) {
+    const parts = line.trim().split(/\s+/);
 
-function drawTriangle(a, b, c) {
-  // Bounding box around the triangle
-  const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
-  const maxX = Math.min(399, Math.ceil(Math.max(a.x, b.x, c.x)));
-  const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
-  const maxY = Math.min(399, Math.ceil(Math.max(a.y, b.y, c.y)));
+    if (parts[0] === 'v') {
+      // v x y z -> a point
+      vertices.push({
+        x: parseFloat(parts[1]),
+        y: parseFloat(parts[2]),
+        z: parseFloat(parts[3])
+      });
+    }
 
-  // Check every pixel inside the box
-  for (let y = minY; y <= maxY; y++) {
-    for (let x = minX; x <= maxX; x++) {
-      const [u, v, w] = barycentric(a, b, c, x, y);
-      if (u >= 0 && v >= 0 && w >= 0) {
-        // Mix the three corner colors using u, v, w
-        const r = u * 255;  // corner a is red
-        const g = v * 255;  // corner b is green
-        const bl = w * 255; // corner c is blue
-        setPixel(x, y, r, g, bl);
-      }
+    if (parts[0] === 'f') {
+      // f a b c -> a triangle (subtract 1 because JS starts counting from 0)
+      faces.push([
+        parseInt(parts[1]) - 1,
+        parseInt(parts[2]) - 1,
+        parseInt(parts[3]) - 1
+      ]);
     }
   }
+
+  return { vertices, faces };
 }
 
-// Three corners of the triangle
-const p1 = { x: 50,  y: 350 };
-const p2 = { x: 350, y: 300 };
-const p3 = { x: 200, y: 50  };
+const model = parseOBJ(objText);
 
-drawTriangle(p1, p2, p3);
-
-ctx.putImageData(img, 0, 0);
+document.getElementById('out').textContent =
+  'Vertices: ' + model.vertices.length + '\n' +
+  'Triangles: ' + model.faces.length + '\n\n' +
+  'First vertex: ' + JSON.stringify(model.vertices[0]) + '\n' +
+  'First triangle: ' + JSON.stringify(model.faces[0]);
 </script>

@@ -9,25 +9,25 @@
 </style>
 </head>
 <body>
-<canvas id="canvas" width="400" height="400"></canvas>
+<canvas id="canvas" width="800" height="800"></canvas>
 <script>
+const W = 800, H = 800;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
-const img = ctx.createImageData(400, 400);
+const img = ctx.createImageData(W, H);
 
 // Make every pixel opaque (black by default)
 for (let i = 3; i < img.data.length; i += 4) img.data[i] = 255;
 
 function setPixel(x, y, r, g, b) {
-  if (x < 0 || x >= 400 || y < 0 || y >= 400) return;
-  const i = (y * 400 + x) * 4;
+  if (x < 0 || x >= W || y < 0 || y >= H) return;
+  const i = (y * W + x) * 4;
   img.data[i]     = r;
   img.data[i + 1] = g;
   img.data[i + 2] = b;
   img.data[i + 3] = 255;
 }
 
-// Draw a line between two points, pixel by pixel
 function drawLine(x0, y0, x1, y1, r, g, b) {
   const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
   for (let i = 0; i <= steps; i++) {
@@ -38,30 +38,8 @@ function drawLine(x0, y0, x1, y1, r, g, b) {
   }
 }
 
-// A cube written as OBJ text
-const objText = `
-v -1 -1 -1
-v  1 -1 -1
-v  1  1 -1
-v -1  1 -1
-v -1 -1  1
-v  1 -1  1
-v  1  1  1
-v -1  1  1
-f 1 2 3
-f 1 3 4
-f 5 7 6
-f 5 8 7
-f 1 5 6
-f 1 6 2
-f 2 6 7
-f 2 7 3
-f 3 7 8
-f 3 8 4
-f 4 8 5
-f 4 5 1
-`;
-
+// Read an OBJ file. Faces look like "f 1/1/1 2/2/2 3/3/3",
+// so we take only the number before the first "/".
 function parseOBJ(text) {
   const vertices = [];
   const faces = [];
@@ -75,37 +53,46 @@ function parseOBJ(text) {
       });
     }
     if (parts[0] === 'f') {
-      faces.push([
-        parseInt(parts[1]) - 1,
-        parseInt(parts[2]) - 1,
-        parseInt(parts[3]) - 1
-      ]);
+      const idx = parts.slice(1).map(p => parseInt(p.split('/')[0]) - 1);
+      // If a face has more than 3 points, split it into triangles
+      for (let i = 1; i < idx.length - 1; i++) {
+        faces.push([idx[0], idx[i], idx[i + 1]]);
+      }
     }
   }
   return { vertices, faces };
 }
 
-// Convert a model point (-1..1) to a screen pixel (0..400)
+// Convert a model point (about -1..1) to a screen pixel
 function toScreen(v) {
   return {
-    x: Math.round((v.x * 0.7 + 1) * 200),
-    y: Math.round((1 - v.y * 0.7) * 200)
+    x: Math.round((v.x * 0.9 + 1) * W / 2),
+    y: Math.round((1 - v.y * 0.9) * H / 2)
   };
 }
 
-const model = parseOBJ(objText);
-
-// Draw the 3 edges of every triangle
-for (const face of model.faces) {
-  const a = toScreen(model.vertices[face[0]]);
-  const b = toScreen(model.vertices[face[1]]);
-  const c = toScreen(model.vertices[face[2]]);
-  drawLine(a.x, a.y, b.x, b.y, 255, 255, 255);
-  drawLine(b.x, b.y, c.x, c.y, 255, 255, 255);
-  drawLine(c.x, c.y, a.x, a.y, 255, 255, 255);
-}
-
-ctx.putImageData(img, 0, 0);
+// Load the model from the website, then draw it
+fetch('african_head.obj')
+  .then(res => {
+    if (!res.ok) throw new Error('african_head.obj not found');
+    return res.text();
+  })
+  .then(text => {
+    const model = parseOBJ(text);
+    for (const face of model.faces) {
+      const a = toScreen(model.vertices[face[0]]);
+      const b = toScreen(model.vertices[face[1]]);
+      const c = toScreen(model.vertices[face[2]]);
+      drawLine(a.x, a.y, b.x, b.y, 255, 255, 255);
+      drawLine(b.x, b.y, c.x, c.y, 255, 255, 255);
+      drawLine(c.x, c.y, a.x, a.y, 255, 255, 255);
+    }
+    ctx.putImageData(img, 0, 0);
+  })
+  .catch(err => {
+    document.body.insertAdjacentHTML('beforeend',
+      '<p style="color:white">Error: ' + err.message + '</p>');
+  });
 </script>
 </body>
 </html>

@@ -20,7 +20,7 @@ function barycentric(a, b, c, px, py) {
   return [u, v, 1 - u - v];
 }
 
-function drawTriangle(a, b, c, r, g, bl) {
+function drawTriangle(a, b, c) {
   // Bounding box around the triangle
   const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
   const maxX = Math.min(399, Math.ceil(Math.max(a.x, b.x, c.x)));
@@ -32,6 +32,10 @@ function drawTriangle(a, b, c, r, g, bl) {
     for (let x = minX; x <= maxX; x++) {
       const [u, v, w] = barycentric(a, b, c, x, y);
       if (u >= 0 && v >= 0 && w >= 0) {
+        // Mix the three corner colors using u, v, w
+        const r = u * 255;  // corner a is red
+        const g = v * 255;  // corner b is green
+        const bl = w * 255; // corner c is blue
         setPixel(x, y, r, g, bl);
       }
     }
@@ -43,7 +47,7 @@ const p1 = { x: 50,  y: 350 };
 const p2 = { x: 350, y: 300 };
 const p3 = { x: 200, y: 50  };
 
-drawTriangle(p1, p2, p3, 255, 0, 0);
+drawTriangle(p1, p2, p3);
 
 ctx.putImageData(img, 0, 0);
 </script>

@@ -4,28 +4,30 @@
 <meta charset="utf-8">
 <title>3D Software Renderer</title>
 <style>
-  body { background: #444; margin: 10px; }
+  body { background: #444; margin: 10px; color: white; font-family: sans-serif; }
   canvas { background: #000; display: block; }
+  .controls { margin-top: 10px; }
+  button { font-size: 18px; padding: 8px 14px; margin-right: 6px; }
 </style>
 </head>
 <body>
 <canvas id="canvas" width="700" height="700"></canvas>
+<div class="controls">
+  <button onclick="moveCamera(-0.3, 0)">⬅️ Left</button>
+  <button onclick="moveCamera(0.3, 0)">➡️ Right</button>
+  <button onclick="moveCamera(0, 0.3)">⬆️ Up</button>
+  <button onclick="moveCamera(0, -0.3)">⬇️ Down</button>
+  <button onclick="zoomCamera(-0.3)">➕ Closer</button>
+  <button onclick="zoomCamera(0.3)">➖ Farther</button>
+</div>
 <script>
 const W = 700, H = 700;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const img = ctx.createImageData(W, H);
-for (let i = 3; i < img.data.length; i += 4) img.data[i] = 255;
+const zbuffer = new Float32Array(W * H);
 
-// Z-buffer: smaller z = closer to the camera
-const zbuffer = new Float32Array(W * H).fill(Infinity);
-
-function setPixel(x, y, r, g, b) {
-  const i = (y * W + x) * 4;
-  img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
-}
-
-// ---------- Small math helpers ----------
+// ---------- Math helpers ----------
 function sub(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
 function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
 function cross(a, b) {
@@ -35,8 +37,6 @@ function normalize(a) {
   const l = Math.sqrt(dot(a, a));
   return l === 0 ? [0, 0, 0] : [a[0] / l, a[1] / l, a[2] / l];
 }
-
-// 4x4 matrices are stored as 16 numbers, row by row
 function mulMat(a, b) {
   const out = new Array(16).fill(0);
   for (let r = 0; r < 4; r++)
@@ -45,7 +45,7 @@ function mulMat(a, b) {
         out[r * 4 + c] += a[r * 4 + k] * b[k * 4 + c];
   return out;
 }
-function mulVec(m, v) { // v = [x, y, z, w]
+function mulVec(m, v) {
   const out = [0, 0, 0, 0];
   for (let r = 0; r < 4; r++)
     for (let c = 0; c < 4; c++)
@@ -64,12 +64,10 @@ class Camera {
     this.near = near;
     this.far = far;
   }
-
-  // View matrix: moves the world so that the camera is at the origin looking down -z
   getViewMatrix() {
-    const f = normalize(sub(this.target, this.position)); // forward
-    const s = normalize(cross(f, this.up));               // right
-    const u = cross(s, f);                                // true up
+    const f = normalize(sub(this.target, this.position));
+    const s = normalize(cross(f, this.up));
+    const u = cross(s, f);
     const e = this.position;
     return [
        s[0],  s[1],  s[2], -dot(s, e),
@@ -78,8 +76,6 @@ class Camera {
        0,     0,     0,     1
     ];
   }
-
-  // Projection matrix: perspective (far things look smaller)
   getProjectionMatrix() {
     const t = 1 / Math.tan(this.fov / 2);
     const n = this.near, f = this.far;
@@ -90,46 +86,73 @@ class Camera {
       0, 0, -1, 0
     ];
   }
-
-  // Direction the camera looks (used for the light)
-  getForward() { return normalize(sub(this.target, this.position)); }
 }
 
-// Change these numbers to move the camera!
-const camera = new Camera(
-  [1, 0.5, 3],   // position: 3 units in front of the face
-  [0, 0, 0],   // target: looking at the center
-  [0, 1, 0],   // up direction
-  45,          // field of view in degrees
-  W / H,       // aspect ratio
-  0.1,         // near
-  100          // far
-);
+const camera = new Camera([0, 0, 3], [0, 0, 0], [0, 1, 0], 45, W / H, 0.1, 100);
+
+function moveCamera(dx, dy) {
+  camera.position[0] += dx;
+  camera.position[1] += dy;
+  render();
+}
+function zoomCamera(dz) {
+  camera.position[2] += dz;
+  render();
+}
+
+// ---------- Phong lighting ----------
+// Light direction: pointing from the face towards the light (up-right-front)
+const lightDir = normalize([0.5, 0.6, 1]);
+const ambient = 0.1;        // minimum light everywhere
+const diffuseK = 0.8;       // main light strength
+const specularK = 0.5;      // shininess strength
+const shininess = 30;       // bigger = smaller, sharper highlight
+
+// Compute the color of one pixel from its normal and view direction
+function phong(normal, viewDir) {
+  const n = normalize(normal);
+  const diff = Math.max(0, dot(n, lightDir));
+  // Reflection of the light around the normal: R = 2(N.L)N - L
+  const nl = dot(n, lightDir);
+  const refl = [2 * nl * n[0] - lightDir[0], 2 * nl * n[1] - lightDir[1], 2 * nl * n[2] - lightDir[2]];
+  const spec = diff > 0 ? Math.pow(Math.max(0, dot(normalize(refl), viewDir)), shininess) : 0;
+  const v = ambient + diffuseK * diff + specularK * spec;
+  const c = Math.min(255, Math.round(255 * v));
+  return c;
+}
 
 // ---------- Rasterizer ----------
-function barycentric(a, b, c, px, py) {
-  const d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
-  if (d === 0) return [-1, -1, -1];
-  const u = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / d;
-  const v = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / d;
-  return [u, v, 1 - u - v];
-}
-
-function drawTriangle(a, b, c, r, g, bl) {
+// Each vertex: x, y, z (screen) + nx, ny, nz (normal)
+function drawTriangle(a, b, c) {
   const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
   const maxX = Math.min(W - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
   const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
   const maxY = Math.min(H - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+
+  const d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+  if (d === 0) return;
+
   for (let y = minY; y <= maxY; y++) {
     for (let x = minX; x <= maxX; x++) {
-      const [u, v, w] = barycentric(a, b, c, x, y);
+      const u = ((b.y - c.y) * (x - c.x) + (c.x - b.x) * (y - c.y)) / d;
+      const v = ((c.y - a.y) * (x - c.x) + (a.x - c.x) * (y - c.y)) / d;
+      const w = 1 - u - v;
       if (u < 0 || v < 0 || w < 0) continue;
+
       const z = u * a.z + v * b.z + w * c.z;
       const idx = y * W + x;
-      if (z < zbuffer[idx]) {
-        zbuffer[idx] = z;
-        setPixel(x, y, r, g, bl);
-      }
+      if (z >= zbuffer[idx]) continue;
+      zbuffer[idx] = z;
+
+      // Mix the 3 corner normals (this makes the shading smooth)
+      const normal = [
+        u * a.n[0] + v * b.n[0] + w * c.n[0],
+        u * a.n[1] + v * b.n[1] + w * c.n[1],
+        u * a.n[2] + v * b.n[2] + w * c.n[2]
+      ];
+      const col = phong(normal, viewDirGlobal);
+      const i = idx * 4;
+      img.data[i] = col; img.data[i + 1] = col; img.data[i + 2] = col; img.data[i + 3] = 255;
     }
   }
 }
@@ -139,9 +162,7 @@ function parseOBJ(text) {
   const vertices = [], faces = [];
   for (const line of text.split('\n')) {
     const p = line.trim().split(/\s+/);
-    if (p[0] === 'v') {
-      vertices.push([parseFloat(p[1]), parseFloat(p[2]), parseFloat(p[3])]);
-    }
+    if (p[0] === 'v') vertices.push([parseFloat(p[1]), parseFloat(p[2]), parseFloat(p[3])]);
     if (p[0] === 'f') {
       const idx = p.slice(1).map(s => parseInt(s.split('/')[0]) - 1);
       for (let i = 1; i < idx.length - 1; i++) faces.push([idx[0], idx[i], idx[i + 1]]);
@@ -150,46 +171,72 @@ function parseOBJ(text) {
   return { vertices, faces };
 }
 
+// For every vertex, average the normals of all triangles that touch it
+function computeVertexNormals(model) {
+  const normals = model.vertices.map(() => [0, 0, 0]);
+  for (const f of model.faces) {
+    const v0 = model.vertices[f[0]], v1 = model.vertices[f[1]], v2 = model.vertices[f[2]];
+    const n = cross(sub(v2, v0), sub(v1, v0)); // not normalized: bigger triangles count more
+    for (const i of f) {
+      normals[i][0] += n[0]; normals[i][1] += n[1]; normals[i][2] += n[2];
+    }
+  }
+  return normals.map(normalize);
+}
+
 // ---------- Render ----------
+let model = null;
+let vertexNormals = null;
+let viewDirGlobal = [0, 0, 1];
+
+function render() {
+  if (!model) return;
+
+  // Clear the picture and the Z-buffer
+  for (let i = 0; i < img.data.length; i += 4) {
+    img.data[i] = 0; img.data[i + 1] = 0; img.data[i + 2] = 0; img.data[i + 3] = 255;
+  }
+  zbuffer.fill(Infinity);
+
+  // Direction from the face towards the camera
+  viewDirGlobal = normalize(sub(camera.position, camera.target));
+
+  const pv = mulMat(camera.getProjectionMatrix(), camera.getViewMatrix());
+
+  const verts = model.vertices.map((v, i) => {
+    const c = mulVec(pv, [v[0], v[1], v[2], 1]);
+    return {
+      x: (c[0] / c[3] + 1) * W / 2,
+      y: (1 - c[1] / c[3]) * H / 2,
+      z: c[2] / c[3],
+      n: vertexNormals[i]
+    };
+  });
+
+  for (const f of model.faces) {
+    const v0 = model.vertices[f[0]], v1 = model.vertices[f[1]], v2 = model.vertices[f[2]];
+    // Skip triangles that face away from the camera
+    const fn = normalize(cross(sub(v2, v0), sub(v1, v0)));
+    const toCam = normalize(sub(camera.position, v0));
+    if (dot(fn, toCam) <= 0) continue;
+
+    drawTriangle(verts[f[0]], verts[f[1]], verts[f[2]]);
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
 fetch('african_head.obj')
   .then(res => {
     if (!res.ok) throw new Error('african_head.obj not found');
     return res.text();
   })
   .then(text => {
-    const model = parseOBJ(text);
-
-    // Step 1: clip = Projection * View * vertex
-    const pv = mulMat(camera.getProjectionMatrix(), camera.getViewMatrix());
-
-    // Step 2: divide by w, then convert to screen pixels
-    const screen = model.vertices.map(v => {
-      const c = mulVec(pv, [v[0], v[1], v[2], 1]);
-      const ndcX = c[0] / c[3], ndcY = c[1] / c[3], ndcZ = c[2] / c[3];
-      return { x: (ndcX + 1) * W / 2, y: (1 - ndcY) * H / 2, z: ndcZ };
-    });
-
-    // Light comes from the camera towards the face
-    const light = camera.getForward();
-
-    for (const face of model.faces) {
-      const v0 = model.vertices[face[0]];
-      const v1 = model.vertices[face[1]];
-      const v2 = model.vertices[face[2]];
-
-      const n = normalize(cross(sub(v2, v0), sub(v1, v0)));
-      const intensity = dot(n, light);
-      if (intensity <= 0) continue;
-
-      const c = Math.round(255 * intensity);
-      drawTriangle(screen[face[0]], screen[face[1]], screen[face[2]], c, c, c);
-    }
-
-    ctx.putImageData(img, 0, 0);
+    model = parseOBJ(text);
+    vertexNormals = computeVertexNormals(model);
+    render();
   })
   .catch(err => {
-    document.body.insertAdjacentHTML('beforeend',
-      '<p style="color:white">Error: ' + err.message + '</p>');
+    document.body.insertAdjacentHTML('beforeend', '<p>Error: ' + err.message + '</p>');
   });
 </script>
 </body>

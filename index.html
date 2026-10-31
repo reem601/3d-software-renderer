@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <title>3D Software Renderer</title>
 <style>
-  body { background: #444; margin: 20px; }
+  body { background: #444; margin: 10px; }
   canvas { background: #000; display: block; }
 </style>
 </head>
 <body>
-<canvas id="canvas" width="800" height="800"></canvas>
+<canvas id="canvas" width="700" height="700"></canvas>
 <script>
-const W = 800, H = 800;
+const W = 700, H = 700;
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const img = ctx.createImageData(W, H);
@@ -19,8 +19,11 @@ const img = ctx.createImageData(W, H);
 // Make every pixel opaque (black by default)
 for (let i = 3; i < img.data.length; i += 4) img.data[i] = 255;
 
+// Z-buffer: for every pixel, remember how close the nearest point is.
+// Starts at -Infinity (nothing drawn yet). Bigger z = closer to us.
+const zbuffer = new Float32Array(W * H).fill(-Infinity);
+
 function setPixel(x, y, r, g, b) {
-  if (x < 0 || x >= W || y < 0 || y >= H) return;
   const i = (y * W + x) * 4;
   img.data[i]     = r;
   img.data[i + 1] = g;
@@ -28,18 +31,39 @@ function setPixel(x, y, r, g, b) {
   img.data[i + 3] = 255;
 }
 
-function drawLine(x0, y0, x1, y1, r, g, b) {
-  const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
-  for (let i = 0; i <= steps; i++) {
-    const t = steps === 0 ? 0 : i / steps;
-    const x = Math.round(x0 + (x1 - x0) * t);
-    const y = Math.round(y0 + (y1 - y0) * t);
-    setPixel(x, y, r, g, b);
+// Returns u, v, w. If all are >= 0, the point is inside the triangle.
+function barycentric(a, b, c, px, py) {
+  const d = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+  if (d === 0) return [-1, -1, -1]; // flat triangle, skip it
+  const u = ((b.y - c.y) * (px - c.x) + (c.x - b.x) * (py - c.y)) / d;
+  const v = ((c.y - a.y) * (px - c.x) + (a.x - c.x) * (py - c.y)) / d;
+  return [u, v, 1 - u - v];
+}
+
+// Fill a triangle. Each point has x, y (screen) and z (depth).
+function drawTriangle(a, b, c, r, g, bl) {
+  const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x)));
+  const maxX = Math.min(W - 1, Math.ceil(Math.max(a.x, b.x, c.x)));
+  const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y)));
+  const maxY = Math.min(H - 1, Math.ceil(Math.max(a.y, b.y, c.y)));
+
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      const [u, v, w] = barycentric(a, b, c, x, y);
+      if (u < 0 || v < 0 || w < 0) continue; // outside the triangle
+
+      // Depth of this pixel = mix of the 3 corner depths
+      const z = u * a.z + v * b.z + w * c.z;
+      const idx = y * W + x;
+      if (z > zbuffer[idx]) {          // closer than what is already there?
+        zbuffer[idx] = z;
+        setPixel(x, y, r, g, bl);
+      }
+    }
   }
 }
 
-// Read an OBJ file. Faces look like "f 1/1/1 2/2/2 3/3/3",
-// so we take only the number before the first "/".
+// Read an OBJ file (only "v" and "f" lines)
 function parseOBJ(text) {
   const vertices = [];
   const faces = [];
@@ -54,7 +78,6 @@ function parseOBJ(text) {
     }
     if (parts[0] === 'f') {
       const idx = parts.slice(1).map(p => parseInt(p.split('/')[0]) - 1);
-      // If a face has more than 3 points, split it into triangles
       for (let i = 1; i < idx.length - 1; i++) {
         faces.push([idx[0], idx[i], idx[i + 1]]);
       }
@@ -63,15 +86,18 @@ function parseOBJ(text) {
   return { vertices, faces };
 }
 
-// Convert a model point (about -1..1) to a screen pixel
+// Model point (about -1..1) -> screen point. Keep z for the Z-buffer.
 function toScreen(v) {
   return {
-    x: Math.round((v.x * 0.9 + 1) * W / 2),
-    y: Math.round((1 - v.y * 0.9) * H / 2)
+    x: (v.x * 0.9 + 1) * W / 2,
+    y: (1 - v.y * 0.9) * H / 2,
+    z: v.z
   };
 }
 
-// Load the model from the website, then draw it
+// Light shines from the camera towards the face
+const light = { x: 0, y: 0, z: -1 };
+
 fetch('african_head.obj')
   .then(res => {
     if (!res.ok) throw new Error('african_head.obj not found');
@@ -79,14 +105,30 @@ fetch('african_head.obj')
   })
   .then(text => {
     const model = parseOBJ(text);
+
     for (const face of model.faces) {
-      const a = toScreen(model.vertices[face[0]]);
-      const b = toScreen(model.vertices[face[1]]);
-      const c = toScreen(model.vertices[face[2]]);
-      drawLine(a.x, a.y, b.x, b.y, 255, 255, 255);
-      drawLine(b.x, b.y, c.x, c.y, 255, 255, 255);
-      drawLine(c.x, c.y, a.x, a.y, 255, 255, 255);
+      const v0 = model.vertices[face[0]];
+      const v1 = model.vertices[face[1]];
+      const v2 = model.vertices[face[2]];
+
+      // Normal of the triangle = cross product of two of its edges
+      const ax = v2.x - v0.x, ay = v2.y - v0.y, az = v2.z - v0.z;
+      const bx = v1.x - v0.x, by = v1.y - v0.y, bz = v1.z - v0.z;
+      let nx = ay * bz - az * by;
+      let ny = az * bx - ax * bz;
+      let nz = ax * by - ay * bx;
+      const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (len === 0) continue;
+      nx /= len; ny /= len; nz /= len;
+
+      // Brightness = how much the triangle faces the light (0..1)
+      const intensity = nx * light.x + ny * light.y + nz * light.z;
+      if (intensity <= 0) continue; // triangle faces away, skip it
+
+      const c = Math.round(255 * intensity);
+      drawTriangle(toScreen(v0), toScreen(v1), toScreen(v2), c, c, c);
     }
+
     ctx.putImageData(img, 0, 0);
   })
   .catch(err => {

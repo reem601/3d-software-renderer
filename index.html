@@ -4,6 +4,9 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const img = ctx.createImageData(400, 400);
 
+// NEW: paint the whole image black (alpha 255 = fully visible)
+for (let i = 3; i < img.data.length; i += 4) img.data[i] = 255;
+
 function setPixel(x, y, r, g, b) {
   if (x < 0 || x >= 400 || y < 0 || y >= 400) return;
   const i = (y * 400 + x) * 4;
@@ -74,8 +77,8 @@ function parseOBJ(text) {
 // Convert a model point (-1..1) to a screen pixel (0..400)
 function toScreen(v) {
   return {
-    x: Math.round((v.x * 0.7 + 1) * 200), // 0.7 makes the cube a bit smaller
-    y: Math.round((1 - v.y * 0.7) * 200)  // flip y: screen y goes down
+    x: Math.round((v.x * 0.7 + 1) * 200),
+    y: Math.round((1 - v.y * 0.7) * 200)
   };
 }
 
